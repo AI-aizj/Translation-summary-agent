@@ -1,0 +1,126 @@
+<!-- index.html -->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>Qwen AI 助手</title>
+    <style>
+        body { font-family: system-ui, sans-serif; max-width: 800px; margin: 2rem auto; padding: 0 1rem; }
+        .container { display: flex; flex-direction: column; gap: 1rem; }
+        textarea { width: 100%; height: 150px; padding: 0.5rem; }
+        select, button { padding: 0.5rem 1rem; font-size: 1rem; }
+        .buttons { display: flex; gap: 1rem; }
+        #output { background: #f5f5f5; padding: 1rem; min-height: 100px; white-space: pre-wrap; border-radius: 8px;}
+        .status { color: #666; font-size: 0.9rem; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 通义千问 AI 工具箱</h1>
+
+        <div>
+            <label>选择功能：</label>
+            <select id="featureSelect"></select>
+        </div>
+
+        <textarea id="inputText" placeholder="请输入需要处理的文本..."></textarea>
+
+        <div class="buttons">
+            <button onclick="submitAsync()">异步提交 (轮询获取)</button>
+            <button onclick="submitStream()">流式执行 (边发边收)</button>
+        </div>
+
+        <div class="status" id="statusText">状态: 就绪</div>
+        <div id="output"></div>
+    </div>
+
+    <script>
+        // 1. 初始化加载功能列表
+        fetch('/api/features')
+            .then(res => res.json())
+            .then(data => {
+                const select = document.getElementById('featureSelect');
+                data.forEach(f => {
+                    select.add(new Option(f.name, f.id));
+                });
+            });
+
+        // 2. 异步提交 + 轮询逻辑
+        async function submitAsync() {
+            const feature = document.getElementById('featureSelect').value;
+            const text = document.getElementById('inputText').value;
+            const output = document.getElementById('output');
+            const status = document.getElementById('statusText');
+
+            output.innerText = "";
+            status.innerText = "状态: 正在提交任务...";
+
+            // 提交任务
+            const res = await fetch('/api/task', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ feature, text })
+            });
+            const data = await res.json();
+            const taskId = data.task_id;
+
+            // 轮询结果
+            status.innerText = `状态: 任务已提交 (ID: ${taskId.substring(0,6)}...)，正在轮询...`;
+
+            const timer = setInterval(async () => {
+                const pollRes = await fetch(`/api/task/${taskId}`);
+                const pollData = await pollRes.json();
+
+                if (pollData.status === 'completed') {
+                    clearInterval(timer);
+                    status.innerText = "状态: 任务完成";
+                    output.innerText = pollData.result;
+                } else if (pollData.status === 'failed') {
+                    clearInterval(timer);
+                    status.innerText = "状态: 任务失败";
+                    output.innerText = pollData.result;
+                }
+            }, 1000); // 每秒轮询一次
+        }
+
+        // 3. 流式请求逻辑 (Fetch API 解析 SSE)
+        async function submitStream() {
+            const feature = document.getElementById('featureSelect').value;
+            const text = document.getElementById('inputText').value;
+            const output = document.getElementById('output');
+            const status = document.getElementById('statusText');
+
+            output.innerText = "";
+            status.innerText = "状态: 正在接收流式数据...";
+
+            const res = await fetch('/api/stream', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ feature, text })
+            });
+
+            const reader = res.body.getReader();
+            const decoder = new TextDecoder("utf-8");
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                const chunk = decoder.decode(value);
+                const lines = chunk.split('\n');
+
+                for (const line of lines) {
+                    if (line.startsWith('data: ')) {
+                        const data = line.slice(6);
+                        if (data === '[DONE]') {
+                            status.innerText = "状态: 流式输出完成";
+                            return;
+                        }
+                        output.innerText += data;
+                    }
+                }
+            }
+        }
+    </script>
+</body>
+</html>
